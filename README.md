@@ -164,3 +164,114 @@ flowchart TD
     F --> G["JSON de salida<br/>{id, customerId, product, quantity}"]
     D -. "excepción" .-> H["JSON de error<br/>{errorMessage, errorType, stackTrace}"]
 ```
+## 5. Partes III y IV — Arquitectura A: API Gateway con plantillas de mapeo (no proxy)
+
+### Lambdas
+
+Se usa **una Lambda por operación**, todas con el mismo JAR. La clase `OrderFunctions` es el punto de entrada: recibe objetos Java normales y llama a `OrderService`, sin usar clases de AWS.
+
+| Lambda | Handler |
+|---|---|
+| `orders-create` | `edu.eci.orders.lambda.OrderFunctions::createOrder` |
+| `orders-get` | `edu.eci.orders.lambda.OrderFunctions::getOrder` |
+| `orders-find` | `edu.eci.orders.lambda.OrderFunctions::findOrdersByCustomer` |
+
+Cada Lambda arranca con 3 pedidos de ejemplo (`ORD-001`, `ORD-002` de `CUST-42` y `ORD-003` de `CUST-100`), porque **cada Lambda tiene su propia memoria**: un pedido creado en `orders-create` no existe en `orders-get`.
+
+![Lambda get existente](docs/evidencias/06-lambda-get-existente.png)
+![Lambda get inexistente](docs/evidencias/07-lambda-get-inexistente.png)
+![Lambda find](docs/evidencias/08-lambda-find-cust-42.png)
+![Lista de funciones](docs/evidencias/09-lambda-lista-funciones.png)
+
+### API Gateway (REST API `orders-api`, etapa `dev`)
+
+URL base: `https://4b8elxuge2.execute-api.us-east-1.amazonaws.com/dev`
+
+```
+/
+└── /orders              GET  → orders-find
+    │                    POST → orders-create
+    └── /{id}            GET  → orders-get
+```
+
+Todas las integraciones son **Lambda no proxy**. Las plantillas están en la carpeta `apigateway/`:
+
+| Método | Solicitud de integración (entrada) | Respuesta de integración (salida) |
+|---|---|---|
+| `GET /orders/{id}` | `get-order-request.vtl` → `{"id": "..."}` | Predeterminado → 200. Regex `.*does not exist.*` → **404** con `get-order-404-response.vtl` |
+| `GET /orders?customerId=` | `find-orders-request.vtl` → `{"customerId": "..."}` | Predeterminado → 200. Regex `.*customerId is required.*` → **400** con `find-orders-400-response.vtl` |
+| `POST /orders` | `create-order-request.vtl` (pasa el cuerpo tal cual) | Predeterminado → **201** + header `Location` (`create-order-201-response.vtl`). Regex `.*(is required\|must be greater than 0).*` → **400** con `create-order-400-response.vtl` |
+
+![Recursos](docs/evidencias/10-apigw-recursos.png)
+![Plantilla GET](docs/evidencias/11-apigw-mapping-get.png)
+![Respuesta 404](docs/evidencias/11e-apigw-integration-response-404.png)
+
+### Pruebas con curl
+
+```bash
+BASE=https://4b8elxuge2.execute-api.us-east-1.amazonaws.com/dev
+
+curl -i $BASE/orders/ORD-001                       # 200
+curl -i $BASE/orders/ORD-999                       # 404
+curl -i "$BASE/orders?customerId=CUST-42"          # 200 (2 pedidos)
+curl -i "$BASE/orders?customerId=CUST-100"         # 200 (1 pedido)
+curl -i $BASE/orders                               # 400
+curl -i -X POST -H "Content-Type: application/json" --data @events/lambda-create-order-1.json $BASE/orders        # 201
+curl -i -X POST -H "Content-Type: application/json" --data @events/lambda-create-order-invalid.json $BASE/orders  # 400
+```
+
+| Prueba | Resultado |
+|---|---|
+| `GET /orders/ORD-001` | `200 OK` + pedido |
+| `GET /orders/ORD-999` | `404 Not Found` + `{"error":"ORDER_NOT_FOUND","message":"Order ORD-999 does not exist"}` |
+| `GET /orders?customerId=CUST-42` | `200 OK` + `[ORD-001, ORD-002]` |
+| `GET /orders?customerId=CUST-100` | `200 OK` + `[ORD-003]` |
+| `GET /orders` | `400 Bad Request` + `{"error":"MISSING_CUSTOMER_ID","message":"customerId is required"}` |
+| `POST /orders` válido | `201 Created` + `Location: /orders/ORD-005` + pedido |
+| `POST /orders` con `quantity: 0` | `400 Bad Request` + `{"error":"INVALID_REQUEST","message":"quantity must be greater than 0"}` |
+
+![GET 200](docs/evidencias/12-curl-get-200.png)
+![GET 404](docs/evidencias/13-curl-get-404.png)
+![Find CUST-42](docs/evidencias/14-curl-find-cust-42.png)
+![Find CUST-100](docs/evidencias/15-curl-find-cust-100.png)
+![Find 400](docs/evidencias/16-curl-find-400.png)
+![POST 201](docs/evidencias/17-curl-post-201.png)
+![POST 400](docs/evidencias/18-curl-post-400.png)
+
+### Observaciones durante la implementación
+
+- Antes de configurar las respuestas, un error de Java llegaba al cliente con **`200 OK`** y con todo el `stackTrace`. En la integración no proxy, API Gateway responde 200 por defecto aunque Lambda indique `X-Amz-Function-Error: Unhandled`.
+- Cuando faltaba la plantilla de solicitud, el registro mostraba `Endpoint request body after transformations:` vacío y Java recibía los campos en `null`.
+- Después de reiniciar el entorno, los ids volvieron a empezar (de `ORD-006` a `ORD-004`): la memoria de Lambda es **efímera**.
+
+## 6. Punto de control 3 — Responsabilidades de API Gateway (Arquitectura A)
+
+En esta arquitectura, API Gateway es responsable de:
+
+| Responsabilidad | Cómo se hace |
+|---|---|
+| **Enrutamiento** | El árbol de recursos y métodos decide qué Lambda se invoca. |
+| **Extraer parámetros de ruta** | `$input.params('id')` en la plantilla de solicitud. |
+| **Extraer parámetros de consulta** | `$input.params('customerId')` en la plantilla de solicitud. |
+| **Transformar solicitudes** | Plantillas VTL que construyen el JSON que espera Java. |
+| **Transformar respuestas** | Plantillas de respuesta que convierten el error de Lambda al formato `{error, message}` y ocultan el `stackTrace`. |
+| **Elegir códigos de estado** | Respuestas de método (200, 201, 400, 404) y `responseOverride.status = 201`. |
+| **Mapear errores** | Expresiones regulares sobre `errorMessage` (`.*does not exist.*` → 404, etc.). |
+| **Headers** | `Location` se agrega con `responseOverride.header`. |
+
+Java solo hace la lógica de negocio: validar, crear y buscar pedidos.
+
+### Ventajas
+
+- La lógica Java queda **totalmente libre de HTTP y de AWS**: `OrderService` y `OrderFunctions` usan objetos Java normales y se prueban con JUnit sin simular nada.
+- El contrato HTTP (rutas, parámetros, códigos) se puede cambiar **sin recompilar ni volver a desplegar** el JAR.
+- Cada Lambda es pequeña y se puede escalar, monitorear o dar permisos por separado.
+
+### Desventajas
+
+- **La lógica queda repartida**: para entender qué devuelve `GET /orders/ORD-999` hay que revisar el código Java **y** varias pantallas de la consola (solicitud, respuesta de método, respuesta de integración, plantillas).
+- **El mapeo de errores depende del texto del mensaje**: si alguien cambia `"does not exist"` en Java, el 404 deja de funcionar sin que falle ninguna prueba unitaria. Hay un acoplamiento oculto entre Java y la configuración.
+- **Difícil de probar localmente**: las plantillas VTL y las regex solo se pueden probar en AWS.
+- **Errores inesperados no cubiertos**: un error que no coincida con ninguna regex (por ejemplo un JSON mal formado o un `NullPointerException`) cae en la respuesta predeterminada, que en el POST devuelve **201**. Habría que agregar más reglas para responder 500.
+- **Mucha configuración manual y repetitiva**: cada operación necesita su método, su plantilla de entrada, sus respuestas de método y sus respuestas de integración. Fue fácil equivocarse (por ejemplo, poner una plantilla en el método equivocado).
+- **Una Lambda por operación con memoria separada**: un pedido creado con POST no puede consultarse con GET, porque cada Lambda tiene sus propios datos en memoria.

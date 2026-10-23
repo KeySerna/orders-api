@@ -1,0 +1,3 @@
+#set($context.responseOverride.status = 201)
+#set($context.responseOverride.header.Location = "/orders/$input.path('$.id')")
+$input.json('$')
