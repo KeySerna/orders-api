@@ -1,10 +1,8 @@
 # Orders API — API REST serverless con AWS Lambda y API Gateway
 
 **Alumna:** Keyla Y. Serna Illescas
-**Curso:** TDSE Escuela Colombiana de Ingeniería Julio Garavito
 
-**Alumna:** Keyla Y. Serna Illescas
-**Curso:** TDSE — Escuela Colombiana de Ingeniería Julio Garavito
+**Curso:** TDSE, Escuela Colombiana de Ingeniería Julio Garavito
 
 > Entorno: JDK 21 compilando con `maven.compiler.release=17`. Runtime de Lambda: Java 17.
 
