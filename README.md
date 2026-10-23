@@ -374,3 +374,15 @@ curl -i -X POST -H "Content-Type: application/json" --data "{not json" $BASE/ord
 - En **A**, un pedido creado con `POST` no se podía consultar con `GET`, porque eran Lambdas distintas con memoria distinta. En **B** sí (`ORD-005`).
 - En **B**, el único error de configuración fue dejar un método con el proxy apagado, y el registro lo dejó claro (cuerpo vacío y la respuesta `{"statusCode":...}` devuelta literal).
 - En **B**, un JSON mal formado responde **400**. En **A** no había regla para ese caso.
+## 9. Reto final — DELETE /orders/{id}
+
+### Predicción (escrita antes de pedirle la implementación al asistente de IA)
+
+| Pregunta | Mi predicción |
+|---|---|
+| ¿Qué clases Java deben cambiar? | `OrderService` |
+| ¿Se necesita una nueva función Lambda? | Sí, una nueva Lambda para DELETE |
+| ¿Cambia la configuración de API Gateway? | No |
+| ¿Dónde debe estar la lógica de borrado? | En `OrderService` |
+| ¿Dónde se decide si responder 204 o 404? | En el adaptador HTTP (`OrdersHttpHandler`) |
+| ¿Qué pruebas se deben agregar? | Borrar un pedido que no existe |
