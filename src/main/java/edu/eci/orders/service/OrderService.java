@@ -70,6 +70,16 @@ public class OrderService {
         return result;
     }
 
+    /** Elimina un pedido, o lanza OrderNotFoundException si no existe. */
+    public void deleteOrder(String id) {
+        if (isBlank(id)) {
+            throw new InvalidOrderException("INVALID_REQUEST", "id is required");
+        }
+        if (orders.remove(id) == null) {
+            throw new OrderNotFoundException(id);
+        }
+    }
+
     private void validate(CreateOrderRequest request) {
         if (request == null) {
             throw new InvalidOrderException("INVALID_REQUEST", "Request body is required");

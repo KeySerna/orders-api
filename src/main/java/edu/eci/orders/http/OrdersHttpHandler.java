@@ -75,6 +75,10 @@ public class OrdersHttpHandler implements RequestHandler<APIGatewayProxyRequestE
         if ("/orders/{id}".equals(resource) && "GET".equals(method)) {
             return getOrder(param(event.getPathParameters(), "id"));
         }
+        if ("/orders/{id}".equals(resource) && "DELETE".equals(method)) {
+            service.deleteOrder(param(event.getPathParameters(), "id"));
+            return noContent();
+        }
         return json(404, new ErrorResponse("ROUTE_NOT_FOUND", method + " " + resource + " is not supported"), null);
     }
 
@@ -97,6 +101,13 @@ public class OrdersHttpHandler implements RequestHandler<APIGatewayProxyRequestE
     }
 
     // ---------- Utilidades HTTP ----------
+
+    /** 204 No Content: exito sin cuerpo. */
+    private static APIGatewayProxyResponseEvent noContent() {
+        return new APIGatewayProxyResponseEvent()
+                .withStatusCode(204)
+                .withHeaders(new HashMap<>());
+    }
 
     private static String param(Map<String, String> params, String name) {
         return params == null ? null : params.get(name);
