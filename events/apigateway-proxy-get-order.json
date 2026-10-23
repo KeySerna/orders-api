@@ -1,0 +1,38 @@
+{
+  "resource": "/orders/{id}",
+  "path": "/orders/ORD-001",
+  "httpMethod": "GET",
+  "headers": null,
+  "multiValueHeaders": null,
+  "queryStringParameters": null,
+  "multiValueQueryStringParameters": null,
+  "pathParameters": { "id": "ORD-001" },
+  "stageVariables": null,
+  "requestContext": {
+    "resourceId": "v2w4rx",
+    "resourcePath": "/orders/{id}",
+    "httpMethod": "GET",
+    "extendedRequestId": "FrU5mFBXoAMFY4A=",
+    "requestTime": "23/Oct/2026:03:04:03 +0000",
+    "path": "/orders/{id}",
+    "accountId": "XXXXXXXXXXXX",
+    "protocol": "HTTP/1.1",
+    "stage": "test-invoke-stage",
+    "domainPrefix": "testPrefix",
+    "requestTimeEpoch": 1792724643313,
+    "requestId": "5a5f6e61-2259-4bda-8931-917a4a8f6cf6",
+    "identity": {
+      "apiKey": "test-invoke-api-key",
+      "userArn": "XXXX",
+      "caller": "XXXX",
+      "user": "XXXX",
+      "accessKey": "XXXX",
+      "sourceIp": "test-invoke-source-ip",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edg/155.0.0.0"
+    },
+    "domainName": "testPrefix.testDomainName",
+    "apiId": "3wzew6a30d"
+  },
+  "body": null,
+  "isBase64Encoded": false
+}

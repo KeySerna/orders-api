@@ -275,3 +275,102 @@ Java solo hace la lógica de negocio: validar, crear y buscar pedidos.
 - **Errores inesperados no cubiertos**: un error que no coincida con ninguna regex (por ejemplo un JSON mal formado o un `NullPointerException`) cae en la respuesta predeterminada, que en el POST devuelve **201**. Habría que agregar más reglas para responder 500.
 - **Mucha configuración manual y repetitiva**: cada operación necesita su método, su plantilla de entrada, sus respuestas de método y sus respuestas de integración. Fue fácil equivocarse (por ejemplo, poner una plantilla en el método equivocado).
 - **Una Lambda por operación con memoria separada**: un pedido creado con POST no puede consultarse con GET, porque cada Lambda tiene sus propios datos en memoria.
+## 7. Parte V — Arquitectura B: integración Lambda proxy + adaptador HTTP
+
+### Evento que API Gateway envía a Lambda
+
+Con la integración proxy, API Gateway **no transforma nada**: envía a Lambda la petición HTTP completa como JSON. Ejemplo real (con datos personales reemplazados por `XXXX`): [`events/apigateway-proxy-get-order.json`](events/apigateway-proxy-get-order.json).
+
+| Información | Dónde aparece en el evento | Ejemplo |
+|---|---|---|
+| Método HTTP | `httpMethod` | `"GET"` |
+| Ruta | `path` (ruta real) y `resource` (plantilla) | `"/orders/ORD-001"`, `"/orders/{id}"` |
+| Parámetros de ruta | `pathParameters` | `{"id": "ORD-001"}` |
+| Parámetros de consulta | `queryStringParameters` (y `multiValueQueryStringParameters`) | `{"customerId": "CUST-42"}` |
+| Headers | `headers` (y `multiValueHeaders`) | `{"Content-Type": "application/json"}` |
+| Cuerpo | `body`, **como texto** (y `isBase64Encoded`) | `"{\"customerId\":\"CUST-42\",...}"` |
+
+Lambda debe responder con `{"statusCode": ..., "headers": {...}, "body": "..."}`. API Gateway usa ese `statusCode` como código HTTP real.
+
+### Adaptador HTTP
+
+```
+API Gateway (proxy) ──evento──> OrdersHttpHandler ──objetos Java──> OrderService
+                                 (conoce HTTP y AWS)                 (Java normal, sin cambios)
+```
+
+| Lambda | `orders-http` |
+|---|---|
+| Runtime | Java 17, 512 MB, timeout 15 s |
+| Handler | `edu.eci.orders.http.OrdersHttpHandler::handleRequest` |
+| API Gateway | `orders-api-proxy` (`https://3wzew6a30d.execute-api.us-east-1.amazonaws.com/dev`), los 3 métodos en modo **proxy** hacia la misma Lambda |
+
+`OrdersHttpHandler` es la **única** clase que conoce HTTP y AWS. Se encarga de:
+- **enrutar** según `httpMethod` + `resource`;
+- **extraer** `pathParameters`, `queryStringParameters` y `body`;
+- **convertir** el JSON del cuerpo a `CreateOrderRequest` (Jackson);
+- **decidir el código HTTP**: `OrderNotFoundException` → 404, otras `OrderException` → 400, JSON mal formado → 400, cualquier otro error → **500** (sin mostrar detalles internos);
+- agregar el header **`Location`** al crear.
+
+`Order`, `CreateOrderRequest`, las excepciones y `OrderService` **no cambiaron**.
+
+### Pruebas
+
+**Locales (sin AWS):** `OrdersHttpHandlerTest` tiene 10 pruebas que crean eventos de API Gateway en Java y revisan el código HTTP y el JSON de respuesta, incluido el caso 500. En total, `mvn test` ejecuta 25 pruebas.
+
+**Desplegadas:**
+
+```bash
+BASE=https://3wzew6a30d.execute-api.us-east-1.amazonaws.com/dev
+curl -i $BASE/orders/ORD-001                       # 200
+curl -i $BASE/orders/ORD-999                       # 404
+curl -i "$BASE/orders?customerId=CUST-42"          # 200
+curl -i $BASE/orders                               # 400
+curl -i -X POST -H "Content-Type: application/json" --data @events/lambda-create-order-1.json $BASE/orders        # 201
+curl -i -X POST -H "Content-Type: application/json" --data @events/lambda-create-order-invalid.json $BASE/orders  # 400
+curl -i -X POST -H "Content-Type: application/json" --data "{not json" $BASE/orders                               # 400
+```
+
+| Prueba | Resultado |
+|---|---|
+| `GET /orders/ORD-001` | `200 OK` + pedido |
+| `GET /orders/ORD-999` | `404` + `{"error":"ORDER_NOT_FOUND","message":"Order ORD-999 does not exist"}` |
+| `GET /orders?customerId=CUST-42` | `200 OK` + 2 pedidos |
+| `GET /orders` | `400` + `{"error":"MISSING_CUSTOMER_ID","message":"customerId is required"}` |
+| `POST /orders` válido | `201 Created` + `Location: /orders/ORD-005` |
+| `POST /orders` con `quantity: 0` | `400` + `{"error":"INVALID_REQUEST","message":"quantity must be greater than 0"}` |
+| `POST /orders` con JSON mal formado | `400` + `{"error":"INVALID_REQUEST","message":"Malformed JSON body"}` |
+| `GET /orders/ORD-005` (recién creado) | `200 OK`: como hay una sola Lambda, el pedido creado con POST **sí** se puede consultar |
+
+![mvn package](docs/evidencias/19-mvn-package-25-tests.png)
+![Lambda orders-http](docs/evidencias/20-lambda-orders-http-config.png)
+![Recursos proxy](docs/evidencias/21-apigw-proxy-recursos.png)
+![Prueba proxy](docs/evidencias/22-apigw-proxy-evento.png)
+![GET 200](docs/evidencias/23-proxy-get-200.png)
+![GET 404](docs/evidencias/24-proxy-get-404.png)
+![Find 200](docs/evidencias/25-proxy-find-200.png)
+![Find 400](docs/evidencias/26-proxy-find-400.png)
+![POST 201](docs/evidencias/27-proxy-post-201.png)
+![POST 400](docs/evidencias/28-proxy-post-400.png)
+![JSON mal formado](docs/evidencias/29-proxy-post-json-malo.png)
+![GET pedido creado](docs/evidencias/30-proxy-get-pedido-creado.png)
+
+## 8. Comparación de las dos arquitecturas
+
+| Pregunta | A — Transformación en API Gateway | B — Proxy + adaptador HTTP |
+|---|---|---|
+| **¿Cuál requirió más configuración de API Gateway?** | **A.** Por cada método: plantilla de solicitud, respuestas de método (200/201/400/404), respuestas de integración con regex y plantillas de respuesta. | Solo recursos, métodos y el interruptor "proxy". |
+| **¿Cuál requirió más código Java de infraestructura?** | Muy poco: `OrderFunctions` (3 métodos de una línea). | **B.** `OrdersHttpHandler` (enrutamiento, parámetros, JSON, códigos) y dependencias de AWS y Jackson. |
+| **¿Cuál fue más fácil de probar localmente?** | Solo la lógica Java. Las plantillas VTL y las regex solo se pueden probar en AWS. | **B.** Todo el comportamiento HTTP (200, 201, 400, 404, 500) se prueba con JUnit en `OrdersHttpHandlerTest`. |
+| **¿Dónde se definen los códigos HTTP?** | En la **consola de API Gateway**: respuestas de método, regex sobre `errorMessage` y `responseOverride.status`. | En **Java**, dentro de `OrdersHttpHandler` (`json(404, ...)`, `json(201, ...)`). |
+| **¿Qué pasa si la API crece de 3 a 30 operaciones?** | ~30 Lambdas (o métodos) y por cada una varias plantillas y regex hechas a mano: difícil de mantener y fácil de equivocarse. Cada Lambda tiene memoria separada. | Una Lambda; se agregan ramas en el adaptador. El enrutamiento manual con `if` se volvería largo y convendría separarlo (una clase por recurso o una tabla de rutas). Una sola Lambda grande también tiene más arranque en frío y un solo conjunto de permisos. |
+| **¿Cuál deja más limpia la lógica Java?** | Las dos dejan **igual de limpia** a `OrderService`: no cambió en ninguna. En A, ni siquiera el punto de entrada conoce HTTP. | Igual que A para `OrderService`. La parte HTTP vive en una sola clase. |
+| **¿Cuál es más fácil de entender para otro desarrollador?** | Para entender un endpoint hay que mirar el código **y** varias pantallas de la consola. El mapeo de errores depende del texto del mensaje (acoplamiento oculto). | Todo está en el repositorio, en código Java que se lee de arriba abajo y tiene pruebas. |
+| **¿Cuál elegiría para un sistema más grande? ¿Por qué?** | — | **B**, con dos ajustes: definir la infraestructura como código (SAM/CDK/OpenAPI) y separar el enrutamiento cuando crezca. Razones: el comportamiento HTTP queda versionado en Git, se prueba localmente, maneja el 500 y el JSON mal formado, y no depende de regex sobre mensajes. A tiene sentido si el equipo de plataforma quiere controlar el contrato HTTP desde API Gateway, o para funciones muy simples sin manejo de errores. |
+
+### Lo que se observó en la práctica
+
+- En **A**, la mayoría de los errores fueron de **configuración**: plantillas guardadas en el método equivocado, olvidar volver a desplegar, el 201 que la consola no dejaba seleccionar. Ninguno lo detectaba una prueba.
+- En **A**, un pedido creado con `POST` no se podía consultar con `GET`, porque eran Lambdas distintas con memoria distinta. En **B** sí (`ORD-005`).
+- En **B**, el único error de configuración fue dejar un método con el proxy apagado, y el registro lo dejó claro (cuerpo vacío y la respuesta `{"statusCode":...}` devuelta literal).
+- En **B**, un JSON mal formado responde **400**. En **A** no había regla para ese caso.
