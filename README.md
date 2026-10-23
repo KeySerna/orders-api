@@ -528,3 +528,6 @@ mvn package    # genera target/orders-api-1.0.jar (incluye dependencias)
 1. **Arquitectura A:** crear 3 Lambdas Java 17 con el JAR y los handlers de la sección 5. Crear la REST API con integración no proxy y las plantillas de `apigateway/`.
 2. **Arquitectura B:** crear la Lambda `orders-http` (Java 17, 512 MB, 15 s, handler `edu.eci.orders.http.OrdersHttpHandler::handleRequest`). Crear la REST API con `/orders` (GET, POST) y `/orders/{id}` (GET, DELETE), todos con integración **Lambda proxy**, y desplegar en la etapa `dev`.
 3. Probar con los comandos `curl` de las secciones 5, 7 y 9.
+## 15. Video de demostración
+
+[Ver video en YouTube]https://youtu.be/5EJvyyDO9lM
